@@ -28,7 +28,7 @@
     "imagemin-mozjpeg": "8.0.x",
     "imagemin-webpack-plugin": "2.4.x",
     "mini-css-extract-plugin": "0.9.x",
-    "node-sass": "4.13.x",
+    "node-sass": "7.0.x",
     "optimize-css-assets-webpack-plugin": "5.0.x",
     "postcss-loader": "3.0.x",
     "sass-loader": "8.0.x",
