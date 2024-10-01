@@ -7,9 +7,10 @@ class DatabaseHelper {
 
         $host = $db_conf['datasource.host'];
         $dbname = $db_conf['datasource.dbname'];
+        $port = $db_conf['datasource.port'];
         $user = $db_conf['datasource.user'];
         $password = $db_conf['datasource.password'];
 
-        return pg_connect("host=$host dbname=$dbname user=$user password=$password");
+        return pg_connect("host=$host dbname=$dbname port=$port user=$user password=$password");
     }
 }
