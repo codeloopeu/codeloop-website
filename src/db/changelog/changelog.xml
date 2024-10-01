@@ -58,13 +58,8 @@
                 metadata->'utm'->>'utm_campaign' AS utm_campaign,
                 metadata->'utm'->>'utm_term' AS utm_term,
                 NULLIF(metadata->'current_session'->>'referrer', '') AS referrer,
-                COALESCE(metadata->'location'->'address'->>'city', metadata->'locationUserInfo'->'city'->>'name') AS city,
-                CASE
-                    WHEN metadata->'location'->'address'->>'city' = metadata->'locationUserInfo'->'city'->>'name' THEN NULL
-                    WHEN metadata->'location'->'address'->>'city' IS NULL THEN NULL
-                    ELSE metadata->'locationUserInfo'->'city'->>'name'
-                END AS city_alt,
-                COALESCE(metadata->'location'->'address'->>'country', metadata->'locationUserInfo'->'country'->>'name') AS country,
+                COALESCE(metadata->'location'->'address'->>'city', metadata->'locationUserInfo'->>'city') AS city,
+                COALESCE(metadata->'location'->'address'->>'country', metadata->'locationUserInfo'->>'country') AS country,
                 (metadata->'device'->'screen'->>'width') || 'x' || (metadata->'device'->'screen'->>'height') AS viewport,
                 CASE
                     WHEN (metadata->'device'->>'is_phone')::boolean THEN 'phone'
