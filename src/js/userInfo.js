@@ -4,7 +4,7 @@ import session from 'session';
 function getUserLocation() {
   return $.ajax({
     type: 'GET',
-    url: 'https://api.userinfo.io/userinfos',
+    url: 'https://ipinfo.io/json',
     timeout: 3000
   });
 }
