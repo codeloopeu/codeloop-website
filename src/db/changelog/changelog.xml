@@ -103,4 +103,162 @@
             ORDER BY t.event_datetime DESC;
         </createView>
     </changeSet>
+    <changeSet id="2024-10-09-michalkowol" author="michalkowol">
+        <dropView viewName="sessions_info"/>
+        <dropView viewName="events_info"/>
+        <dropView viewName="tracking_info"/>
+        <createView viewName="sessions_info">
+            <![CDATA[
+            SELECT
+                event_datetime,
+                id,
+                client_id,
+                metadata->'utm'->>'utm_medium' AS utm_medium,
+                metadata->'utm'->>'utm_source' AS utm_source,
+                metadata->'utm'->>'utm_content' AS utm_content,
+                metadata->'utm'->>'utm_campaign' AS utm_campaign,
+                metadata->'utm'->>'utm_term' AS utm_term,
+                NULLIF(metadata->'current_session'->>'referrer', '') AS referrer,
+                COALESCE(metadata->'location'->'address'->>'city', metadata->'locationUserInfo'->>'city') AS city,
+                COALESCE(metadata->'location'->'address'->>'country', metadata->'locationUserInfo'->>'country') AS country,
+                (metadata->'device'->'screen'->>'width') || 'x' || (metadata->'device'->'screen'->>'height') AS viewport,
+                CASE
+                    WHEN (metadata->'device'->>'is_phone')::boolean THEN 'phone'
+                    WHEN (metadata->'device'->>'is_tablet')::boolean THEN 'tablet'
+                    ELSE 'desktop'
+                END AS device,
+                (metadata->'locale'->>'lang') || '-' || (metadata->'locale'->>'country') AS lang,
+                metadata->'browser'->>'os' AS os,
+                metadata->'browser'->>'browser' AS browser,
+                metadata->'locationUserInfo'->>'ip_address' AS ip_address,
+                browser_id
+            FROM sessions
+            ORDER BY event_datetime DESC;
+            ]]>
+        </createView>
+        <createView viewName="events_info">
+            <![CDATA[
+            SELECT
+                event_datetime,
+                session_id,
+                metadata->>'id' AS id,
+                metadata->>'type' AS type
+            FROM events AS e
+            ORDER BY e.event_datetime DESC;
+            ]]>
+        </createView>
+        <createView viewName="tracking_info">
+            <![CDATA[
+            SELECT
+                event_datetime,
+                session_id,
+                (metadata->>'banner')::real / 1000 AS banner,
+                (metadata->>'services')::real / 1000  AS services,
+                (metadata->>'process')::real / 1000  AS process,
+                (metadata->>'technologies')::real / 1000  AS technologies,
+                (metadata->>'about')::real / 1000  AS about,
+                (metadata->>'testimony')::real / 1000  AS testimony,
+                (metadata->>'form')::real / 1000  AS form,
+                (metadata->>'footer')::real / 1000  AS footer
+            FROM (
+                SELECT DISTINCT ON (session_id) *
+                FROM tracking
+                ORDER BY session_id, event_datetime DESC
+            ) AS t
+            ORDER BY t.event_datetime DESC;
+            ]]>
+        </createView>
+    </changeSet>
+    <changeSet id="2024-10-09-v2-michalkowol" author="michalkowol">
+        <dropView viewName="sessions_info"/>
+        <dropView viewName="events_info"/>
+        <dropView viewName="tracking_info"/>
+        <sql>
+            <![CDATA[
+            CREATE VIEW sessions_info 
+            WITH (security_invoker = on) 
+            AS
+            SELECT
+                event_datetime,
+                id,
+                client_id,
+                metadata->'utm'->>'utm_medium' AS utm_medium,
+                metadata->'utm'->>'utm_source' AS utm_source,
+                metadata->'utm'->>'utm_content' AS utm_content,
+                metadata->'utm'->>'utm_campaign' AS utm_campaign,
+                metadata->'utm'->>'utm_term' AS utm_term,
+                NULLIF(metadata->'current_session'->>'referrer', '') AS referrer,
+                COALESCE(metadata->'location'->'address'->>'city', metadata->'locationUserInfo'->>'city') AS city,
+                COALESCE(metadata->'location'->'address'->>'country', metadata->'locationUserInfo'->>'country') AS country,
+                (metadata->'device'->'screen'->>'width') || 'x' || (metadata->'device'->'screen'->>'height') AS viewport,
+                CASE
+                    WHEN (metadata->'device'->>'is_phone')::boolean THEN 'phone'
+                    WHEN (metadata->'device'->>'is_tablet')::boolean THEN 'tablet'
+                    ELSE 'desktop'
+                END AS device,
+                (metadata->'locale'->>'lang') || '-' || (metadata->'locale'->>'country') AS lang,
+                metadata->'browser'->>'os' AS os,
+                metadata->'browser'->>'browser' AS browser,
+                metadata->'locationUserInfo'->>'ip_address' AS ip_address,
+                browser_id
+            FROM sessions
+            ORDER BY event_datetime DESC;
+            ]]>
+        </sql>
+        <sql>
+            <![CDATA[
+            CREATE VIEW events_info 
+            WITH (security_invoker = on) 
+            AS
+            SELECT
+                event_datetime,
+                session_id,
+                metadata->>'id' AS id,
+                metadata->>'type' AS type
+            FROM events AS e
+            ORDER BY e.event_datetime DESC;
+            ]]>
+        </sql>
+        <sql>
+            <![CDATA[
+            CREATE VIEW tracking_info 
+            WITH (security_invoker = on) 
+            AS
+            SELECT
+                event_datetime,
+                session_id,
+                (metadata->>'banner')::real / 1000 AS banner,
+                (metadata->>'services')::real / 1000  AS services,
+                (metadata->>'process')::real / 1000  AS process,
+                (metadata->>'technologies')::real / 1000  AS technologies,
+                (metadata->>'about')::real / 1000  AS about,
+                (metadata->>'testimony')::real / 1000  AS testimony,
+                (metadata->>'form')::real / 1000  AS form,
+                (metadata->>'footer')::real / 1000  AS footer
+            FROM (
+                SELECT DISTINCT ON (session_id) *
+                FROM tracking
+                ORDER BY session_id, event_datetime DESC
+            ) AS t
+            ORDER BY t.event_datetime DESC;
+            ]]>
+        </sql>
+    </changeSet>
+    <changeSet id="2024-10-09-v3-michalkowol" author="michalkowol">
+        <sql>
+            ALTER TABLE sessions ENABLE ROW LEVEL SECURITY;
+        </sql>
+        <sql>
+            ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+        </sql>
+        <sql>
+            ALTER TABLE tracking ENABLE ROW LEVEL SECURITY;
+        </sql>
+        <sql>
+            ALTER TABLE databasechangelog ENABLE ROW LEVEL SECURITY;
+        </sql>
+        <sql>
+            ALTER TABLE databasechangeloglock ENABLE ROW LEVEL SECURITY;
+        </sql>
+    </changeSet>
 </databaseChangeLog>
