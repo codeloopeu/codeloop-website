@@ -45,6 +45,6 @@
     "bootstrap": "4.4.x",
     "jquery": "3.5.x",
     "popper.js": "1.16.x",
-    "swiper": "5.2.x"
+    "swiper": "6.5.x"
   }
 }
