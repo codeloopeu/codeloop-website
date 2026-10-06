@@ -564,4 +564,30 @@
             ]]>
         </sql>
     </changeSet>
+    <changeSet id="2026-10-06-v4-michalkowol" author="michalkowol">
+        <dropView viewName="bawiarenka_tracking_info"/>
+        <sql>
+            <![CDATA[
+            CREATE VIEW bawiarenka_tracking_info
+            WITH (security_invoker = on)
+            AS
+            SELECT
+                event_datetime,
+                session_id,
+                (metadata->>'start')::real / 1000 AS start,
+                (metadata->>'przyjecia')::real / 1000 AS przyjecia,
+                (metadata->>'oferta')::real / 1000 AS oferta,
+                (metadata->>'urodziny')::real / 1000 AS urodziny,
+                (metadata->>'faq')::real / 1000 AS faq,
+                (metadata->>'kontakt')::real / 1000 AS kontakt
+            FROM (
+                SELECT DISTINCT ON (session_id) *
+                FROM tracking
+                WHERE domain = 'bawiarenka.com'
+                ORDER BY session_id, event_datetime DESC
+            ) AS t
+            ORDER BY t.event_datetime DESC;
+            ]]>
+        </sql>
+    </changeSet>
 </databaseChangeLog>
