@@ -1,0 +1,37 @@
+#!/bin/sh
+# Blocks commits that add or modify files with credentials or lines that look like secrets.
+# Deleting such files (e.g. git rm --cached) is allowed. Bypass only knowingly: git commit --no-verify
+
+blocked_files='(^|/)(\.user\.ini|liquibase\.properties|\.env(\..*)?|\.npmrc|\.pgpass|credentials(\..*)?|.*\.(pem|key|p12|pfx|jks|keystore)|id_(rsa|ecdsa|ed25519))$'
+secret_line='(pass(word)?|passwd|pwd|secret|token|api[_-]?key|private[_-]?key)[a-z_.-]*[[:space:]]*[:=][[:space:]]*["'\'']?[^[:space:]"'\''<>${}]{4,}'
+known_values='(postgres(ql)?://[^:/[:space:]]+:[^@[:space:]]+@|-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{30,}|xox[abpr]-[A-Za-z0-9-]+|sk-[A-Za-z0-9_-]{20,}|eyJ[A-Za-z0-9_-]{20,}\.eyJ)'
+
+status=0
+IFS='
+'
+
+files=$(git diff --cached --name-only --diff-filter=ACMR)
+bad_files=$(printf '%s\n' "$files" | grep -iE "$blocked_files")
+if [ -n "$bad_files" ]; then
+    echo "pre-commit: refusing to commit files that hold credentials:" >&2
+    printf '  %s\n' $bad_files >&2
+    status=1
+fi
+
+for f in $files; do
+    case "$f" in .githooks/*) continue ;; esac
+    added=$(git diff --cached -U0 --no-color -- "$f" | grep -E '^\+[^+]' | grep -iE "$secret_line|$known_values")
+    [ -n "$added" ] || continue
+    count=$(printf '%s\n' "$added" | grep -cviE 'process\.env|getenv|\$_(ENV|SERVER)|changeme|example|placeholder|xxx')
+    if [ "$count" -gt 0 ]; then
+        [ -n "$printed" ] || echo "pre-commit: staged lines look like secrets (values not shown):" >&2
+        printed=1
+        echo "  $f ($count line(s))" >&2
+        status=1
+    fi
+done
+
+if [ $status -ne 0 ]; then
+    echo "Unstage them (git restore --staged <file>) or keep secrets out of the repo." >&2
+fi
+exit $status

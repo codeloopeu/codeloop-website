@@ -20,6 +20,14 @@
 
 We use use [Airbnb JavaScript Style Guide](https://github.com/airbnb/javascript) for JavaScript and [Primer Stylelint Config](https://github.com/primer/primer/tree/master/tools/stylelint-config-primer) for Sass.
 
+## Git hooks
+
+Enable the pre-commit hook that blocks committing credentials (`.user.ini`, `liquibase.properties`, passwords, tokens):
+
+```
+git config core.hooksPath .githooks
+```
+
 ## Webpack
 
 ### Install dependencies
