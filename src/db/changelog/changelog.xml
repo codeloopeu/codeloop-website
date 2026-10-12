@@ -590,4 +590,112 @@
             ]]>
         </sql>
     </changeSet>
+    <changeSet id="2026-10-12-michalkowol" author="michalkowol">
+        <dropView viewName="bawiarenka_sessions_info"/>
+        <dropView viewName="bawiarenka_tracking_info"/>
+        <sql>
+            <![CDATA[
+            CREATE VIEW bawiarenka_sessions_info
+            WITH (security_invoker = on)
+            AS
+            SELECT
+                event_datetime,
+                id,
+                client_id,
+                metadata->'utm'->>'utm_medium' AS utm_medium,
+                metadata->'utm'->>'utm_source' AS utm_source,
+                metadata->'utm'->>'utm_content' AS utm_content,
+                metadata->'utm'->>'utm_campaign' AS utm_campaign,
+                metadata->'utm'->>'utm_term' AS utm_term,
+                metadata->'utm'->>'utm_id' AS utm_id,
+                metadata->'ads'->>'gclid' AS gclid,
+                metadata->'ads'->>'gbraid' AS gbraid,
+                metadata->'ads'->>'wbraid' AS wbraid,
+                metadata->'ads'->>'gad_source' AS gad_source,
+                metadata->'ads'->>'gad_campaignid' AS gad_campaignid,
+                metadata->'ads'->>'fbclid' AS fbclid,
+                metadata->'ads'->>'msclkid' AS msclkid,
+                NULLIF(metadata->'current_session'->>'referrer', '') AS referrer,
+                COALESCE(metadata->'location'->'address'->>'city', metadata->'locationUserInfo'->>'city') AS city,
+                COALESCE(metadata->'location'->'address'->>'country', metadata->'locationUserInfo'->>'country') AS country,
+                (metadata->'device'->'screen'->>'width') || 'x' || (metadata->'device'->'screen'->>'height') AS viewport,
+                CASE
+                    WHEN (metadata->'device'->>'is_phone')::boolean THEN 'phone'
+                    WHEN (metadata->'device'->>'is_tablet')::boolean THEN 'tablet'
+                    ELSE 'desktop'
+                END AS device,
+                (metadata->'locale'->>'lang') || '-' || (metadata->'locale'->>'country') AS lang,
+                metadata->'browser'->>'os' AS os,
+                metadata->'browser'->>'browser' AS browser,
+                COALESCE(metadata->'locationUserInfo'->>'ip', metadata->'locationUserInfo'->>'ip_address') AS ip_address,
+                browser_id
+            FROM sessions
+            WHERE domain = 'bawiarenka.com'
+            ORDER BY event_datetime DESC;
+            ]]>
+        </sql>
+        <sql>
+            <![CDATA[
+            CREATE VIEW bawiarenka_conversions_info
+            WITH (security_invoker = on)
+            AS
+            SELECT
+                e.event_datetime,
+                e.session_id,
+                s.browser_id,
+                e.metadata->'attribution'->'last'->>'datetime' AS last_touch_datetime,
+                e.metadata->'attribution'->'last'->'utm'->>'utm_source' AS utm_source,
+                e.metadata->'attribution'->'last'->'utm'->>'utm_medium' AS utm_medium,
+                e.metadata->'attribution'->'last'->'utm'->>'utm_campaign' AS utm_campaign,
+                e.metadata->'attribution'->'last'->'utm'->>'utm_term' AS utm_term,
+                e.metadata->'attribution'->'last'->'utm'->>'utm_content' AS utm_content,
+                e.metadata->'attribution'->'last'->'utm'->>'utm_id' AS utm_id,
+                e.metadata->'attribution'->'last'->'ads'->>'gclid' AS gclid,
+                e.metadata->'attribution'->'last'->'ads'->>'gbraid' AS gbraid,
+                e.metadata->'attribution'->'last'->'ads'->>'wbraid' AS wbraid,
+                e.metadata->'attribution'->'last'->'ads'->>'gad_source' AS gad_source,
+                e.metadata->'attribution'->'last'->'ads'->>'gad_campaignid' AS gad_campaignid,
+                e.metadata->'attribution'->'last'->'ads'->>'fbclid' AS fbclid,
+                e.metadata->'attribution'->'last'->'ads'->>'msclkid' AS msclkid,
+                e.metadata->'attribution'->'first'->>'datetime' AS first_touch_datetime,
+                e.metadata->'attribution'->'first'->'utm'->>'utm_source' AS first_utm_source,
+                e.metadata->'attribution'->'first'->'utm'->>'utm_medium' AS first_utm_medium,
+                e.metadata->'attribution'->'first'->'utm'->>'utm_campaign' AS first_utm_campaign,
+                e.metadata->'attribution'->'first'->'utm'->>'utm_term' AS first_utm_term,
+                e.metadata->'attribution'->'first'->'ads'->>'gclid' AS first_gclid,
+                e.metadata->'attribution'->'first'->'ads'->>'gad_campaignid' AS first_gad_campaignid,
+                NULLIF(s.metadata->'current_session'->>'referrer', '') AS session_referrer
+            FROM events AS e
+            LEFT JOIN sessions AS s ON s.id = e.session_id
+            WHERE e.domain = 'bawiarenka.com'
+              AND e.metadata->>'id' = 'birthday-form'
+              AND e.metadata->>'type' = 'sent'
+            ORDER BY e.event_datetime DESC;
+            ]]>
+        </sql>
+        <sql>
+            <![CDATA[
+            CREATE VIEW bawiarenka_tracking_info
+            WITH (security_invoker = on)
+            AS
+            SELECT
+                event_datetime,
+                session_id,
+                (metadata->>'start')::real / 1000 AS start,
+                (metadata->>'przyjecia')::real / 1000 AS przyjecia,
+                (metadata->>'oferta')::real / 1000 AS oferta,
+                (metadata->>'galeria')::real / 1000 AS galeria,
+                (metadata->>'urodziny')::real / 1000 AS urodziny,
+                (metadata->>'faq')::real / 1000 AS faq,
+                (metadata->>'kontakt')::real / 1000 AS kontakt
+            FROM (
+                SELECT DISTINCT ON (session_id) *
+                FROM tracking
+                WHERE domain = 'bawiarenka.com'
+                ORDER BY session_id, event_datetime DESC
+            ) AS t
+            ORDER BY t.event_datetime DESC;
+            ]]>
+        </sql>
+    </changeSet>
 </databaseChangeLog>
