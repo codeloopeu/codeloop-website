@@ -698,4 +698,321 @@
             ]]>
         </sql>
     </changeSet>
+    <changeSet id="2026-10-16-michalkowol" author="michalkowol">
+        <sql>
+            <![CDATA[
+            CREATE VIEW bawiarenka_visits_llm
+            WITH (security_invoker = on)
+            AS
+            WITH internal_browsers (browser_id) AS (
+                VALUES
+                    ('9a1e9795-570e-47c6-90b8-957193f71bd1'::uuid),
+                    ('c12a81c0-d2e4-41a6-9f69-7f6232ad46ca'::uuid),
+                    ('d52e8573-43e3-4620-a2cb-a84951448cec'::uuid)
+            ),
+            page_sections (section, position) AS (
+                VALUES
+                    ('start', 1),
+                    ('przyjecia', 2),
+                    ('oferta', 3),
+                    ('galeria', 4),
+                    ('urodziny', 5),
+                    ('kontakt', 6),
+                    ('faq', 7)
+            ),
+            base_sessions AS (
+                SELECT
+                    s.id AS session_id,
+                    s.browser_id AS visitor_id,
+                    s.event_datetime AS started_at,
+                    s.metadata->'utm'->>'utm_source' AS utm_source,
+                    s.metadata->'utm'->>'utm_medium' AS utm_medium,
+                    COALESCE(s.metadata->'utm'->>'utm_campaign', '') AS utm_campaign,
+                    COALESCE(s.metadata->'utm'->>'utm_term', '') AS utm_term,
+                    COALESCE(s.metadata->'ads'->>'gclid', s.metadata->'ads'->>'gbraid', s.metadata->'ads'->>'wbraid') IS NOT NULL AS has_google_click_id,
+                    s.metadata->'ads'->>'gclid' = 'test123' AS has_test_gclid,
+                    s.metadata->'ads'->>'fbclid' IS NOT NULL AS has_fbclid,
+                    COALESCE(s.metadata->'current_session'->>'path', '') AS landing_path,
+                    COALESCE(s.metadata->'current_session'->>'url', '') AS landing_url,
+                    COALESCE(s.metadata->'current_session'->>'referrer', '') AS referrer,
+                    COALESCE(lower(substring(s.metadata->'current_session'->>'referrer' FROM '^[a-zA-Z][a-zA-Z0-9+.-]*://([^/:?#]+)')), '') AS referrer_host,
+                    CASE
+                        WHEN (s.metadata->'device'->>'is_phone')::boolean THEN 'phone'
+                        WHEN (s.metadata->'device'->>'is_tablet')::boolean THEN 'tablet'
+                        ELSE 'desktop'
+                    END AS device,
+                    concat_ws(' ', s.metadata->'browser'->>'os', s.metadata->'browser'->>'browser') AS os_and_user_agent,
+                    COALESCE(s.metadata->'location'->'address'->>'city', s.metadata->'locationUserInfo'->>'city', '') AS city
+                FROM sessions AS s
+                WHERE s.domain = 'bawiarenka.com'
+            ),
+            session_events AS (
+                SELECT
+                    e.session_id,
+                    e.event_datetime,
+                    e.metadata->>'id' AS element,
+                    e.metadata->>'type' AS type,
+                    GREATEST(0, round(extract(epoch FROM e.event_datetime - bs.started_at)))::int AS second
+                FROM events AS e
+                JOIN base_sessions AS bs ON bs.session_id = e.session_id
+                WHERE e.domain = 'bawiarenka.com'
+            ),
+            event_timeline AS (
+                SELECT
+                    session_id,
+                    string_agg('+' || second || 's ' || element || ':' || type, ' | ' ORDER BY event_datetime) AS journey
+                FROM (
+                    SELECT
+                        se.*,
+                        row_number() OVER (PARTITION BY session_id, element = 'consent' ORDER BY event_datetime) AS consent_number,
+                        lag(element || ':' || type) OVER (PARTITION BY session_id ORDER BY event_datetime) AS previous_event,
+                        lag(event_datetime) OVER (PARTITION BY session_id ORDER BY event_datetime) AS previous_event_datetime
+                    FROM session_events AS se
+                ) AS t
+                WHERE (element IS DISTINCT FROM 'consent' OR consent_number = 1)
+                  AND (previous_event IS DISTINCT FROM element || ':' || type OR event_datetime - previous_event_datetime >= interval '2 seconds')
+                GROUP BY session_id
+            ),
+            faq_opens AS (
+                SELECT
+                    se.session_id,
+                    bs.visitor_id,
+                    replace(se.element, 'faq-', '') AS question,
+                    min(se.event_datetime) AS first_opened_at
+                FROM session_events AS se
+                JOIN base_sessions AS bs ON bs.session_id = se.session_id
+                WHERE se.type = 'open' AND se.element LIKE 'faq-%'
+                GROUP BY se.session_id, bs.visitor_id, se.element
+            ),
+            visit_faq AS (
+                SELECT
+                    session_id,
+                    string_agg(question, ', ' ORDER BY first_opened_at) AS faq_opened
+                FROM faq_opens
+                GROUP BY session_id
+            ),
+            event_stats AS (
+                SELECT
+                    session_id,
+                    max(event_datetime) AS last_event_at,
+                    bool_or(type = 'click' AND element IN ('hero-reserve', 'occasions-reserve', 'bar-reserve')) AS clicked_reserve,
+                    bool_or(type = 'focus' AND element IN ('email', 'message')) AS focused_form,
+                    bool_or(element = 'birthday-form' AND type = 'invalid') AS form_invalid,
+                    bool_or(element = 'birthday-form' AND type = 'failed') AS form_failed,
+                    bool_or(element = 'birthday-form' AND type = 'sent') AS converted,
+                    bool_or(type = 'click' AND element LIKE '%-call') AS phone_clicked,
+                    bool_or(type = 'copy') AS phone_copied,
+                    bool_or(type = 'click' AND element IN ('contact-instagram', 'contact-facebook')) AS social_clicked,
+                    bool_or(type = 'click' AND element IN ('contact-map', 'contact-map-show')) AS map_clicked,
+                    count(*) FILTER (WHERE type = 'click') AS clicks_count,
+                    min(second) FILTER (WHERE type = 'click') AS seconds_to_first_click,
+                    min(second) FILTER (WHERE element = 'birthday-form' AND type = 'sent') AS seconds_to_conversion,
+                    min(event_datetime) FILTER (WHERE element = 'birthday-form' AND type = 'sent') AS converted_at
+                FROM session_events
+                GROUP BY session_id
+            ),
+            last_tracking AS (
+                SELECT DISTINCT ON (t.session_id)
+                    t.session_id,
+                    t.event_datetime,
+                    t.metadata
+                FROM tracking AS t
+                WHERE t.domain = 'bawiarenka.com'
+                ORDER BY t.session_id, t.event_datetime DESC
+            ),
+            section_times AS (
+                SELECT
+                    lt.session_id,
+                    ps.section,
+                    ps.position,
+                    (lt.metadata->>ps.section)::numeric AS ms
+                FROM last_tracking AS lt
+                CROSS JOIN page_sections AS ps
+                WHERE (lt.metadata->>ps.section)::numeric > 0
+            ),
+            section_stats AS (
+                SELECT
+                    session_id,
+                    string_agg(section || ' ' || trim_scale(round(ms / 1000, 1)) || 's', ', ' ORDER BY position) AS sections,
+                    (array_agg(section ORDER BY position DESC))[1] AS furthest_section,
+                    max(position) AS furthest_position,
+                    (array_agg(section ORDER BY ms DESC, position))[1] AS top_section
+                FROM section_times
+                GROUP BY session_id
+            ),
+            visit_stats AS (
+                SELECT
+                    bs.*,
+                    bs.started_at AT TIME ZONE 'Europe/Warsaw' AS started_at_local,
+                    row_number() OVER visitor_visits AS visit_number,
+                    round(extract(epoch FROM bs.started_at - lag(bs.started_at) OVER visitor_visits) / 60)::int AS minutes_since_previous_visit,
+                    CASE
+                        WHEN bs.has_google_click_id OR bs.utm_medium = 'cpc' THEN 'google_ads'
+                        WHEN bs.utm_source = 'google' AND bs.utm_medium = 'organic' THEN 'google_business_profile'
+                        WHEN bs.referrer_host ~ '(^|\.)google\.' AND bs.referrer_host <> 'tagassistant.google.com' THEN 'google_organic'
+                        WHEN bs.referrer_host ~ '(^|\.)instagram\.com$' OR bs.utm_source IN ('instagram', 'ig') THEN 'instagram'
+                        WHEN bs.referrer_host ~ '(^|\.)(facebook\.com|fb\.com|fb\.me)$' OR bs.utm_source IN ('facebook', 'fb') OR bs.has_fbclid THEN 'facebook'
+                        WHEN bs.referrer_host <> '' AND bs.referrer_host !~ '(^|\.)bawiarenka\.com$' THEN 'other_referrer'
+                        ELSE 'direct'
+                    END AS source,
+                    CASE
+                        WHEN bs.os_and_user_agent ~* 'android' THEN 'Android'
+                        WHEN bs.os_and_user_agent ~* 'iphone|ipad|ipod|ios' THEN 'iOS'
+                        WHEN bs.os_and_user_agent ~* 'win' THEN 'Windows'
+                        WHEN bs.os_and_user_agent ~* 'mac' THEN 'macOS'
+                        WHEN bs.os_and_user_agent ~* 'linux|cros' THEN 'Linux'
+                        ELSE 'other'
+                    END AS os_family,
+                    COALESCE(GREATEST(0, round(extract(epoch FROM GREATEST(es.last_event_at, lt.event_datetime) - bs.started_at)))::int, 0) AS duration_s,
+                    COALESCE(ss.furthest_section, '') AS furthest_section,
+                    COALESCE(ss.furthest_position, 0) AS furthest_position,
+                    COALESCE(ss.sections, '') AS sections,
+                    COALESCE(ss.top_section, '') AS top_section,
+                    COALESCE(es.clicked_reserve, false) AS clicked_reserve,
+                    COALESCE(es.focused_form, false) AS focused_form,
+                    COALESCE(es.form_invalid, false) AS form_invalid,
+                    COALESCE(es.form_failed, false) AS form_failed,
+                    COALESCE(es.converted, false) AS converted,
+                    COALESCE(es.phone_clicked, false) AS phone_clicked,
+                    COALESCE(es.phone_copied, false) AS phone_copied,
+                    COALESCE(es.social_clicked, false) AS social_clicked,
+                    COALESCE(es.map_clicked, false) AS map_clicked,
+                    COALESCE(vf.faq_opened, '') AS faq_opened,
+                    COALESCE(es.clicks_count, 0) AS clicks_count,
+                    es.seconds_to_first_click,
+                    es.seconds_to_conversion,
+                    es.converted_at,
+                    COALESCE(et.journey, '') AS journey,
+                    ib.browser_id IS NOT NULL AS is_internal
+                FROM base_sessions AS bs
+                LEFT JOIN event_stats AS es ON es.session_id = bs.session_id
+                LEFT JOIN event_timeline AS et ON et.session_id = bs.session_id
+                LEFT JOIN visit_faq AS vf ON vf.session_id = bs.session_id
+                LEFT JOIN last_tracking AS lt ON lt.session_id = bs.session_id
+                LEFT JOIN section_stats AS ss ON ss.session_id = bs.session_id
+                LEFT JOIN internal_browsers AS ib ON ib.browser_id = bs.visitor_id
+                WINDOW visitor_visits AS (PARTITION BY bs.visitor_id ORDER BY bs.started_at, bs.session_id)
+            ),
+            visitor_faq AS (
+                SELECT
+                    visitor_id,
+                    string_agg(question, ', ' ORDER BY first_opened_at) AS faq_opened_all
+                FROM (
+                    SELECT visitor_id, question, min(first_opened_at) AS first_opened_at
+                    FROM faq_opens
+                    GROUP BY visitor_id, question
+                ) AS q
+                GROUP BY visitor_id
+            ),
+            visitor_stats AS (
+                SELECT
+                    vs.visitor_id,
+                    count(*) AS total_visits,
+                    min(vs.started_at_local) AS first_visit_local,
+                    max(vs.started_at_local) AS last_visit_local,
+                    count(DISTINCT vs.started_at_local::date) AS days_active,
+                    (array_agg(vs.source ORDER BY vs.visit_number))[1] AS first_source,
+                    string_agg(DISTINCT vs.device || '/' || vs.os_family, ', ') AS devices,
+                    bool_or(vs.converted) AS converted,
+                    min(vs.visit_number) FILTER (WHERE vs.converted) - 1 AS visits_before_conversion,
+                    (min(vs.converted_at) AT TIME ZONE 'Europe/Warsaw')::date - min(vs.started_at_local)::date AS days_to_conversion,
+                    sum(vs.duration_s) AS total_duration_s,
+                    (array_agg(vs.furthest_section ORDER BY vs.furthest_position DESC))[1] AS max_furthest_section
+                FROM visit_stats AS vs
+                GROUP BY vs.visitor_id
+            ),
+            visits AS (
+                SELECT
+                    vs.*,
+                    vis.total_visits,
+                    vis.first_visit_local,
+                    vis.last_visit_local,
+                    vs.started_at_local::date - vis.first_visit_local::date + 1 AS visitor_day,
+                    COALESCE(bool_or(vs.converted) OVER (
+                        PARTITION BY vs.visitor_id ORDER BY vs.visit_number
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+                    ), false) AS visit_after_conversion,
+                    vs.is_internal
+                        OR vs.utm_campaign = 'test'
+                        OR vs.has_test_gclid IS TRUE
+                        OR vs.referrer_host = 'tagassistant.google.com'
+                        OR vs.landing_url ~ '[?&]gtm_debug=' AS is_test
+                FROM visit_stats AS vs
+                JOIN visitor_stats AS vis ON vis.visitor_id = vs.visitor_id
+            )
+            SELECT
+                date_trunc('second', v.started_at_local) AS visit_start,
+                trim(to_char(v.started_at_local, 'Day')) AS weekday,
+                extract(hour FROM v.started_at_local)::int AS hour,
+                v.session_id,
+                v.visitor_id,
+                v.visit_number,
+                v.minutes_since_previous_visit,
+                v.source,
+                v.utm_campaign,
+                v.utm_term,
+                v.landing_path,
+                v.referrer_host,
+                v.device,
+                v.os_family,
+                v.city,
+                v.duration_s,
+                v.furthest_section,
+                v.sections,
+                v.top_section,
+                v.clicked_reserve,
+                v.focused_form,
+                v.form_invalid,
+                v.form_failed,
+                v.converted,
+                v.phone_clicked,
+                v.phone_copied,
+                v.social_clicked,
+                v.map_clicked,
+                v.faq_opened,
+                v.clicks_count,
+                v.seconds_to_first_click,
+                v.seconds_to_conversion,
+                v.visit_after_conversion,
+                v.is_internal,
+                v.is_test,
+                v.journey,
+                concat_ws(', ',
+                    format('Visit %s of %s (day %s)', v.visit_number, v.total_visits, v.visitor_day),
+                    v.source || COALESCE(' ''' || NULLIF(v.utm_term, '') || '''', ''),
+                    v.device || '/' || v.os_family,
+                    v.duration_s || 's',
+                    'reached ' || NULLIF(v.furthest_section, ''),
+                    'opened ' || NULLIF(replace(v.faq_opened, ', ', '+'), ''),
+                    CASE WHEN v.clicked_reserve THEN 'clicked reserve' END,
+                    CASE WHEN v.focused_form THEN 'focused form' END,
+                    CASE WHEN v.form_invalid THEN 'form invalid' END,
+                    CASE WHEN v.form_failed THEN 'form failed' END,
+                    CASE WHEN v.phone_clicked THEN 'clicked phone' END,
+                    CASE WHEN v.phone_copied THEN 'copied phone' END,
+                    CASE WHEN v.social_clicked THEN 'clicked social' END,
+                    CASE WHEN v.map_clicked THEN 'clicked map' END,
+                    CASE WHEN v.visit_after_conversion THEN 'returned after conversion' END,
+                    CASE WHEN v.converted THEN 'converted after ' || v.seconds_to_conversion || 's' ELSE 'no conversion' END,
+                    CASE WHEN v.is_test THEN 'test traffic' END
+                ) || '.' AS summary,
+                v.total_visits AS visitor_total_visits,
+                date_trunc('second', v.first_visit_local) AS visitor_first_visit,
+                date_trunc('second', v.last_visit_local) AS visitor_last_visit,
+                vis.days_active AS visitor_days_active,
+                vis.first_source AS visitor_first_source,
+                vis.devices AS visitor_devices,
+                vis.converted AS visitor_converted,
+                vis.visits_before_conversion AS visitor_visits_before_conversion,
+                vis.days_to_conversion AS visitor_days_to_conversion,
+                vis.total_duration_s AS visitor_total_duration_s,
+                COALESCE(vf.faq_opened_all, '') AS visitor_faq_opened_all,
+                vis.max_furthest_section AS visitor_max_furthest_section
+            FROM visits AS v
+            JOIN visitor_stats AS vis ON vis.visitor_id = v.visitor_id
+            LEFT JOIN visitor_faq AS vf ON vf.visitor_id = v.visitor_id
+            ORDER BY visitor_last_visit DESC, v.visitor_id, v.visit_number;
+            ]]>
+        </sql>
+    </changeSet>
 </databaseChangeLog>
